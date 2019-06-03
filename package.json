@@ -1,0 +1,10 @@
+{
+  "name": "webrtc-web-demo",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "https://github.com/aritse/webRTC-demo.git",
+  "license": "MIT",
+  "scripts": {
+    "build": "rd /s /q  work\\dist & tsc -p tsconfig.json"
+  }
+}
