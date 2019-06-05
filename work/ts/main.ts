@@ -1,10 +1,10 @@
-const mediaStreamConstraints: MediaStreamConstraints = { video: true };
-const offerOptions: RTCOfferOptions = { offerToReceiveVideo: true };
+let startTime: number = 0;
 
-let startTime: number;
+const constraints: MediaStreamConstraints = { video: true };
+const options: RTCOfferOptions = { offerToReceiveVideo: true };
 
-const localVideoHTMLElement: HTMLVideoElement = document.getElementById("localVideo") as HTMLVideoElement;
-const remoteVideoHTMLElement: HTMLVideoElement = document.getElementById("remoteVideo") as HTMLVideoElement;
+const localVideo: HTMLVideoElement = document.getElementById("localVideo") as HTMLVideoElement;
+const remoteVideo: HTMLVideoElement = document.getElementById("remoteVideo") as HTMLVideoElement;
 
 let localMediaStream: MediaStream;
 let remoteMediaStream: MediaStream;
@@ -12,211 +12,192 @@ let remoteMediaStream: MediaStream;
 let localPeerConnection: RTCPeerConnection;
 let remotePeerConnection: RTCPeerConnection;
 
-localVideoHTMLElement.addEventListener("loadedmetadata", logVideoLoaded);
-remoteVideoHTMLElement.addEventListener("loadedmetadata", logVideoLoaded);
-remoteVideoHTMLElement.addEventListener("resize", logResizedVideo);
+localVideo.addEventListener("loadedmetadata", logVideoLoaded);
+remoteVideo.addEventListener("loadedmetadata", logVideoLoaded);
+remoteVideo.addEventListener("resize", logVideoResized);
 
-const startButton = document.getElementById("startButton") as HTMLButtonElement;
-const callButton = document.getElementById("callButton") as HTMLButtonElement;
-const endButton = document.getElementById("endButton") as HTMLButtonElement;
+const startButton: HTMLButtonElement = document.getElementById("startButton") as HTMLButtonElement;
+const callButton: HTMLButtonElement = document.getElementById("callButton") as HTMLButtonElement;
+const endButton: HTMLButtonElement = document.getElementById("endButton") as HTMLButtonElement;
 
 startButton.disabled = false;
 callButton.disabled = true;
 endButton.disabled = true;
 
-startButton.addEventListener("click", startButtonAction);
-callButton.addEventListener("click", callButtonAction);
-endButton.addEventListener("click", endButtonAction);
+startButton.addEventListener("click", cbStartButton);
+callButton.addEventListener("click", cbCallButton);
+endButton.addEventListener("click", cbEndButton);
 
-function startButtonAction() {
+function cbStartButton(): void {
+  trace("Getting user media stream");
+
   startButton.disabled = true;
-  navigator.mediaDevices
-    .getUserMedia(mediaStreamConstraints)
-    .then(cbGotLocalMediaStream)
-    .catch(cbHandleLocalMediaStreamError);
-  trace("Requesting local media stream");
+  navigator.mediaDevices.getUserMedia(constraints).then(cbGotUserMediaStream).catch(cbHandleUserMediaStreamError);
 }
 
-function callButtonAction() {
+function cbCallButton(): void {
+  trace("Calling a peer over RTCPeerConnection");
+  startTime = window.performance.now();
+
   callButton.disabled = true;
   endButton.disabled = false;
 
-  trace("Starting call over RTCPeerConnection");
-  startTime = window.performance.now();
+  const localVideoTrack = localMediaStream.getVideoTracks()[0];
+  trace("Using local video device: " + localVideoTrack.label);
 
-  const videoTrack = localMediaStream.getVideoTracks()[0];
-  trace(`Using video device: ${videoTrack.label}`);
-
-  localPeerConnection = new RTCPeerConnection(undefined);
+  localPeerConnection = new RTCPeerConnection();
   trace("Created local peer connection object localPeerConnection");
+  localPeerConnection.addEventListener("icecandidate", cbHandleConnection);
+  localPeerConnection.addEventListener("iceconnectionstatechange", cbHandleConnectionChange);
+  localPeerConnection.addTrack(localVideoTrack);
+  trace("Added local media stream track to localPeerConnection");
 
-  localPeerConnection.addEventListener("icecandidate", cbHandleConnection as EventListener);
-  localPeerConnection.addEventListener("iceconnectionstatechange", cbHandleConnectionChange as EventListener);
-
-  remotePeerConnection = new RTCPeerConnection(undefined);
+  remotePeerConnection = new RTCPeerConnection();
   trace("Created remote peer connection object remotePeerConnection");
-
-  remotePeerConnection.addEventListener("icecandidate", cbHandleConnection as EventListener);
-  remotePeerConnection.addEventListener("iceconnectionstatechange", cbHandleConnectionChange as EventListener);
+  remotePeerConnection.addEventListener("icecandidate", cbHandleConnection);
+  remotePeerConnection.addEventListener("iceconnectionstatechange", cbHandleConnectionChange);
   remotePeerConnection.addEventListener("track", cbGotRemoteMediaStreamTrack);
 
-  localPeerConnection.addTrack(videoTrack);
-  trace("Added local stream to localPeerConnection");
-
   trace("localPeerConnection starting createOffer");
-  localPeerConnection
-    .createOffer(offerOptions)
-    .then(createdOffer)
-    .catch(setSessionDescriptionError);
+  localPeerConnection.createOffer(options)
+    .then(cbCreatedOffer)
+    .catch(cbHandleSessionDescriptionError);
 }
 
-function endButtonAction() {
+function cbEndButton(): void {
+  localPeerConnection.removeTrack(localPeerConnection.getSenders()[0]);
   localPeerConnection.close();
+  remotePeerConnection.removeTrack(remotePeerConnection.getSenders()[0]);
   remotePeerConnection.close();
   endButton.disabled = true;
   callButton.disabled = false;
-  trace("Ending call over RTCPeerConnection");
+  trace("Call over RTCPeerConnection ended");
 }
 
-function cbGotLocalMediaStream(mediaStream: MediaStream) {
-  localMediaStream = mediaStream;
-  localVideoHTMLElement.srcObject = localMediaStream;
-  trace("Received local media stream");
-  callButton.disabled = false;
-}
-
-function cbHandleLocalMediaStreamError(error: MediaStreamError) {
-  trace(`navigator.getUserMedia error: ${error}`);
-}
-
-function cbGotRemoteMediaStreamTrack(event: RTCTrackEvent) {
-  remoteMediaStream = new MediaStream([event.track]);
-  remoteVideoHTMLElement.srcObject = remoteMediaStream;
-  trace("Remote peer connection received remote stream");
-}
-
-function logVideoLoaded(event: Event) {
-  const video = event.target as HTMLVideoElement;
-  trace(`${video.id}: ${video.videoWidth}x${video.videoHeight}px`);
-}
-
-function logResizedVideo(event: UIEvent) {
-  logVideoLoaded(event);
-  if (startTime) {
-    const elapsedTime = window.performance.now() - startTime;
-    startTime = 0;
-    trace(`Setup time: ${elapsedTime.toFixed(3)}ms`);
-  }
-}
-
-function cbHandleConnection(event: RTCPeerConnectionIceEvent) {
-  const peerConnection = event.target as RTCPeerConnection;
+function cbHandleConnection(event: RTCPeerConnectionIceEvent): void {
+  const peerConnection: RTCPeerConnection = event.target as RTCPeerConnection;
   const iceCandidate = event.candidate;
 
   if (iceCandidate) {
     const newIceCandidate = new RTCIceCandidate(iceCandidate as RTCIceCandidateInit);
     const otherPeer = getOtherPeer(peerConnection);
 
-    otherPeer
-      .addIceCandidate(newIceCandidate)
-      .then(() => {
-        handleConnectionSuccess(peerConnection);
-      })
-      .catch(error => {
-        handleConnectionFailure(peerConnection, error);
-      });
+    otherPeer.addIceCandidate(newIceCandidate)
+      .then(() => { handleConnectionSuccess(peerConnection); })
+      .catch(error => { handleConnectionFailure(peerConnection, error); });
     const rtcIceCandidate: RTCIceCandidate | null = event.candidate;
     trace(`${getPeerName(peerConnection)} ICE candidate:\n` + `${rtcIceCandidate}.`);
   }
 }
 
-function handleConnectionSuccess(peerConnection: RTCPeerConnection) {
-  trace(`${getPeerName(peerConnection)} addIceCandidate success.`);
+function handleConnectionSuccess(peerConnection: RTCPeerConnection): void {
+  trace(getPeerName(peerConnection) + "addIceCandidate success");
 }
 
-function handleConnectionFailure(peerConnection: RTCPeerConnection, error: RTCError) {
+function handleConnectionFailure(peerConnection: RTCPeerConnection, error: RTCError): void {
   trace(`${getPeerName(peerConnection)} failed to add ICE Candidate:\n` + `${error}.`);
 }
 
-function cbHandleConnectionChange(event: RTCPeerConnectionIceEvent) {
+function cbHandleConnectionChange(event: Event): void {
   const peerConnection = event.target as RTCPeerConnection;
   console.log("ICE state change event: ", event);
   trace(`${getPeerName(peerConnection)} ICE state: ` + `${peerConnection.iceConnectionState}`);
 }
 
-function setSessionDescriptionError(error: RTCError) {
-  trace(`Failed to create session description: ${error}`);
+function cbGotUserMediaStream(mediaStream: MediaStream): void {
+  localMediaStream = mediaStream;
+  localVideo.srcObject = localMediaStream;
+  callButton.disabled = false;
+  trace("Got user media stream");
 }
 
-function setDescriptionSuccess(peerConnection: RTCPeerConnection, functionName: string) {
-  const peerName = getPeerName(peerConnection);
-  trace(`${peerName} ${functionName} complete.`);
+function cbHandleUserMediaStreamError(error: MediaStreamError): void {
+  if (error.message) {
+    trace(error.message);
+  }
 }
 
-function setLocalDescriptionSuccess(peerConnection: RTCPeerConnection) {
+function cbGotRemoteMediaStreamTrack(event: RTCTrackEvent): void {
+  remoteMediaStream = new MediaStream([event.track]);
+  remoteVideo.srcObject = remoteMediaStream;
+  trace("Remote peer connection received remote media stream");
+}
+
+function cbCreatedOffer(description: RTCSessionDescriptionInit): void {
+  trace("Offer created by localPeerConnection");
+  trace("localPeerConnection starting setLocalDescription");
+  localPeerConnection.setLocalDescription(description)
+    .then(() => { setLocalDescriptionSuccess(localPeerConnection); })
+    .catch(cbHandleSessionDescriptionError);
+
+  trace("remotePeerConnection starting setRemoteDescription");
+  remotePeerConnection.setRemoteDescription(description)
+    .then(() => { setRemoteDescriptionSuccess(remotePeerConnection); })
+    .catch(cbHandleSessionDescriptionError);
+
+  trace("remotePeerConnection starting createAnswer");
+  remotePeerConnection.createAnswer()
+    .then(cbCreatedAnswer)
+    .catch(cbHandleSessionDescriptionError);
+}
+
+function cbCreatedAnswer(description: RTCSessionDescriptionInit): void {
+  trace("Answer created by remotePeerConnection");
+  trace("remotePeerConnection starting setLocalDescription");
+  remotePeerConnection.setLocalDescription(description)
+    .then(() => { setLocalDescriptionSuccess(remotePeerConnection); })
+    .catch(cbHandleSessionDescriptionError);
+
+  trace("localPeerConnection starting setRemoteDescription");
+  localPeerConnection.setRemoteDescription(description)
+    .then(() => { setRemoteDescriptionSuccess(localPeerConnection); })
+    .catch(cbHandleSessionDescriptionError);
+}
+
+function setLocalDescriptionSuccess(peerConnection: RTCPeerConnection): void {
   setDescriptionSuccess(peerConnection, "setLocalDescription");
 }
 
-function setRemoteDescriptionSuccess(peerConnection: RTCPeerConnection) {
+function setRemoteDescriptionSuccess(peerConnection: RTCPeerConnection): void {
   setDescriptionSuccess(peerConnection, "setRemoteDescription");
 }
 
-function createdOffer(description: RTCSessionDescriptionInit) {
-  // trace(`Offer from localPeerConnection:\n${description.sdp}`);
-  trace(`Offer from localPeerConnection`);
-  trace("localPeerConnection setLocalDescription start");
-  localPeerConnection
-    .setLocalDescription(description)
-    .then(() => {
-      setLocalDescriptionSuccess(localPeerConnection);
-    })
-    .catch(setSessionDescriptionError);
-
-  trace("remotePeerConnection setRemoteDescription start.");
-  remotePeerConnection
-    .setRemoteDescription(description)
-    .then(() => {
-      setRemoteDescriptionSuccess(remotePeerConnection);
-    })
-    .catch(setSessionDescriptionError);
-
-  trace("remotePeerConnection createAnswer start.");
-  remotePeerConnection
-    .createAnswer()
-    .then(createdAnswer)
-    .catch(setSessionDescriptionError);
+function setDescriptionSuccess(peerConnection: RTCPeerConnection, functionName: string): void {
+  trace(getPeerName(peerConnection) + " completed " + functionName);
 }
 
-function createdAnswer(description: RTCSessionDescriptionInit) {
-  // trace(`Answer from remotePeerConnection:\n${description.sdp}.`);
-  trace(`Answer from remotePeerConnection`);
-  trace("remotePeerConnection setLocalDescription start.");
-  remotePeerConnection
-    .setLocalDescription(description)
-    .then(() => {
-      setLocalDescriptionSuccess(remotePeerConnection);
-    })
-    .catch(setSessionDescriptionError);
-
-  trace("localPeerConnection setRemoteDescription start.");
-  localPeerConnection
-    .setRemoteDescription(description)
-    .then(() => {
-      setRemoteDescriptionSuccess(localPeerConnection);
-    })
-    .catch(setSessionDescriptionError);
+function cbHandleSessionDescriptionError(error: RTCError): void {
+  if (error.message) {
+    trace(error.message);
+  }
 }
 
-function getOtherPeer(peerConnection: RTCPeerConnection) {
-  return peerConnection === localPeerConnection ? remotePeerConnection : localPeerConnection;
+// Helper functions
+
+function logVideoLoaded(event: Event): void {
+  const video: HTMLVideoElement = event.target as HTMLVideoElement;
+  const size: string = "(" + video.videoHeight.toString() + "x" + video.videoWidth.toString() + "px)";
+  trace("Media stream is loaded into " + video.id + " " + size);
 }
 
-function getPeerName(peerConnection: RTCPeerConnection) {
-  return peerConnection === localPeerConnection ? "localPeerConnection" : "remotePeerConnection";
+function logVideoResized(event: UIEvent): void {
+  logVideoLoaded(event);
+  if (startTime) {
+    const elapsedTime: number = window.performance.now() - startTime;
+    trace("Setup time: " + elapsedTime.toFixed(3) + "ms");
+    startTime = 0;
+  }
 }
 
-function trace(text: string) {
-  text = text.trim();
+function getOtherPeer(peerConnection: RTCPeerConnection): RTCPeerConnection {
+  return (peerConnection === localPeerConnection) ? remotePeerConnection : localPeerConnection;
+}
+
+function getPeerName(peerConnection: RTCPeerConnection): string {
+  return (peerConnection === localPeerConnection) ? "localPeerConnection" : "remotePeerConnection";
+}
+
+function trace(text: string): void {
   const now = (window.performance.now() / 1000).toFixed(3);
-  console.log(now, text);
+  console.log(now, text.trim());
 }
